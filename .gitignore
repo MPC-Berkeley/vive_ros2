@@ -1,6 +1,10 @@
 devel/
 logs/
 build/
+install/
+dist/
+*.egg*
+log/
 bin/
 lib/
 msg_gen/

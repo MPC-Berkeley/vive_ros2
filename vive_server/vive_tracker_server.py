@@ -20,6 +20,7 @@ from base_server import Server
 from typing import List
 import socket
 
+
 class ViveTrackerServer(Server):
     """
     Defines a UDP vive tracker server that constantly "shout out" messages at (HOST, PORT)

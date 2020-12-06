@@ -4,18 +4,13 @@ Defines Vive Tracker server. This script should run as is.
 Example usage:
 python vive_tracker_client.py --debug True
 
-For Vive Tracker Server implementation, please see
-https://github.com/wuxiaohua1011/ROAR_Desktop/blob/main/ROAR_Server/vive_tracker_server.py
-
 """
 import socket
 import logging
 from typing import Optional
+from os.path import expanduser
 
-try:
-    from ROAR_Jetson.vive.models import ViveTrackerMessage
-except:
-    from vive_server.models import ViveTrackerMessage
+from vive_server.models import ViveTrackerMessage
 import json
 from typing import Tuple
 import argparse
@@ -36,7 +31,7 @@ class ViveTrackerClient:
     def __init__(self, host: str, port: int, tracker_name: str,
                  time_out: float = 1, buffer_length: int = 1024,
                  should_record: bool = False,
-                 output_file_path: Path = Path("../data/RFS_Track.txt")):
+                 output_file_path: Path = Path(expanduser("~") + "/vive_ros2/data/RFS_Track.txt")):
         """
 
         Args:
@@ -61,7 +56,7 @@ class ViveTrackerClient:
         self.output_file_path = output_file_path
         self.output_file = None
         if self.should_record:
-            if self.output_file_path.parent.exists() is False:
+            if self.output_file_path.parent.exists():
                 self.output_file_path.parent.mkdir(exist_ok=True, parents=True)
             self.output_file = self.output_file_path.open('w')
         self.count = 0
@@ -113,8 +108,49 @@ class ViveTrackerClient:
             except Exception as e:
                 self.logger.debug(e)
 
-    def run_threaded(self):
-        pass
+    def run_threaded(self, queue, kill):
+        """
+        Same as update but uses queue and listens to kil event
+
+        Args:
+            queue: Queue object that receives messages
+            kill: signal to end the thread
+
+        Returns:
+            None
+        """
+        self.logger.info(f"Start Subscribing to [{self.host}:{self.port}] "
+                         f"for [{self.tracker_name}] Vive Tracker Updates")
+        while not kill.is_set():
+            try:
+                _ = self.socket.sendto(self.tracker_name.encode(), (self.host, self.port))
+                data, addr = self.socket.recvfrom(self.buffer_length)  # buffer size is 1024 bytes
+                parsed_message, status = self.parse_message(data.decode())
+                if status:
+                    self.update_latest_tracker_message(parsed_message=parsed_message)
+                    queue.put(self.latest_tracker_message)
+                    if self.should_record:
+                        if self.count % 10 == 0:
+                            self.output_file.write(f'{self.latest_tracker_message.x},'
+                                                   f'{self.latest_tracker_message.y},'
+                                                   f'{self.latest_tracker_message.z},'
+                                                   f'{self.latest_tracker_message.roll},'
+                                                   f'{self.latest_tracker_message.pitch},'
+                                                   f'{self.latest_tracker_message.yaw}\n')
+                    self.count += 1
+                else:
+                    self.logger.error(f"Failed to parse incoming message [{data.decode()}]")
+            except socket.timeout:
+                self.logger.error("Timed out")
+            except ConnectionResetError as e:
+                self.logger.error(f"Error: {e}. Retrying")
+            except OSError as e:
+                pass
+                # self.logger.error(e)
+            except KeyboardInterrupt:
+                exit(1)
+            except Exception as e:
+                self.logger.debug(e)
 
     def shutdown(self):
         """
@@ -200,8 +236,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logging.basicConfig(format='%(asctime)s|%(name)s|%(levelname)s|%(message)s',
                         datefmt="%H:%M:%S", level=logging.DEBUG if args.debug is True else logging.INFO)
-    HOST, PORT = "192.168.50.171", 8000
-    client = ViveTrackerClient(host=HOST, port=PORT, tracker_name="tracker_1",
-                               output_file_path=Path("../data/RFS_Track.txt"),
-                               should_record=args.collect)
+    HOST, PORT = "127.0.0.1", 8000
+    client = ViveTrackerClient(host=HOST, port=PORT, tracker_name="tracker_1", should_record=args.collect)
     client.update()
