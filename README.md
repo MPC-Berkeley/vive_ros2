@@ -10,6 +10,7 @@ the client can be run on the robot or target device. The server and client can a
 be run on the same device if desired. 
 
 ## Getting Started
+### Running the Python Server
 The best way to get started is to install conda and run `conda create -f env.yaml` which 
 will create a conda environment with the correct python version and libraries. You can then
 activate the environment with `conda activate pythonvr`. Start the server by running `vive_tracker_server.py` in 
@@ -36,3 +37,12 @@ Found 1 Tracker
   tracker_1 (LHR-55804C5D, VIVE Tracker Pro MV)
 ###########
 ```
+
+### Running the ROS2 Client
+In order to run the ROS2 node first run `sudo python3 setup.py install` to install the
+package with the object type for the messages transmitted by the server. You may also have
+to install some packages with pip such as pydantic if it is not already installed `pip3 install pydantic`.
+
+You can then run the node by running `ros2 run vive_ros2 vive_tracker_node.py --ros-args -p host_ip:=******** 
+-p host_port:=****`. You should then be able to run `ros2 topic echo /tracker/odom` to verify 
+the node is working.
