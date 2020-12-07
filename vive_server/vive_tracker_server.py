@@ -12,6 +12,7 @@ from os.path import expanduser
 
 from typing import Optional
 from triad_openvr import TriadOpenVR
+from utils import q_mult, q_conjugate
 import logging
 from models import ViveTrackerMessage
 import json
@@ -137,12 +138,19 @@ class ViveTrackerServer(Server):
 
         """
         try:
-            euler = tracker.get_pose_euler()
+            x, y, z, qw, qx, qy, qz = tracker.get_pose_quaternion()
             vel_x, vel_y, vel_z = tracker.get_velocity()
-            x, y, z, yaw, pitch, roll = euler
-            message = ViveTrackerMessage(valid=True, x=-x, y=y, z=-z,
-                                         yaw=yaw, pitch=pitch, roll=roll,
+            p, q, r = tracker.get_angular_velocity()
+
+            # Rotate velocity in local frame
+            vel = [0, vel_x, vel_y, vel_z]
+            q = [qw, qx, qy, qz]
+            _, vel_x, vel_y, vel_z = q_mult(q, q_mult(vel, q_conjugate(q)))
+
+            message = ViveTrackerMessage(valid=True, x=x, y=y, z=z,
+                                         qx=qx, qy=qy, qz=qz, qw=qw,
                                          vel_x=vel_x, vel_y=vel_y, vel_z=vel_z,
+                                         p=p, q=q, r=r,
                                          device_name=tracker_name)
             return message
         except OSError as e:
