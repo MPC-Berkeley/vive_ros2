@@ -19,11 +19,11 @@ class ViveTrackerNode(Node):
         self.declare_parameter('host_ip', '192.168.50.171')
         self.declare_parameter('host_port', 8000)
         self.declare_parameter('tracker_name', 'tracker_1')
-        self.declare_parameter('parent_link_name', 'odom')
-        self.declare_parameter('link_name', 'tracker_link')
+        self.declare_parameter('link_name', 'odom')
+        self.declare_parameter('child_link_name', 'tracker_link')
 
-        (self.host_ip, self.host_port, self.tracker_name, self.parent_link_name, self.link_name) = self.get_parameters(
-            ['host_ip', 'host_port', 'tracker_name', 'parent_link_name', 'link_name'])
+        (self.host_ip, self.host_port, self.tracker_name, self.link_name, self.child_link_name) = self.get_parameters(
+            ['host_ip', 'host_port', 'tracker_name', 'link_name', 'child_link_name'])
 
         self.odom_pub = self.create_publisher(Odometry, self.tracker_name.get_parameter_value().string_value + '/odom',
                                               qos_profile=qos_profile_sensor_data)
@@ -47,7 +47,7 @@ class ViveTrackerNode(Node):
                 odom_msg.header.stamp = self.get_clock().now().to_msg()
                 odom_msg.header.frame_id = self.link_name.get_parameter_value().string_value
 
-                odom_msg.child_frame_id = self.parent_link_name.get_parameter_value().string_value
+                odom_msg.child_frame_id = self.child_link_name.get_parameter_value().string_value
 
                 odom_msg.pose.pose.position.x = msg.x
                 odom_msg.pose.pose.position.y = msg.y
