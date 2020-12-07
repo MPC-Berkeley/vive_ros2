@@ -1,15 +1,12 @@
 import setuptools
 
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
-
 setuptools.setup(
     name="vive_ros2_server",
     version="0.0.1",
     author="Michael Equi",
     author_email="michaelequi@berkeley.edu",
     description="Package for running the pure python server",
-    long_description=long_description,
+    long_description="",
     long_description_content_type="text/markdown",
     url="https://github.com/MPC-Berkeley/vive_ros2",
     packages=setuptools.find_packages(),
