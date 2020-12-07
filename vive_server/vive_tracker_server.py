@@ -79,8 +79,8 @@ class ViveTrackerServer(Server):
                     if message is not None:
                         socket_message = self.construct_socket_msg(data=message)
                         self.socket.sendto(socket_message.encode(), addr)
-                    if self.should_record:
-                        self.record(data=message)
+                        if self.should_record:
+                            self.record(data=message)
                 else:
                     self.logger.error(f"Tracker [{tracker_name}] not found")
             except socket.timeout:
@@ -144,8 +144,8 @@ class ViveTrackerServer(Server):
 
             # Rotate velocity in local frame
             vel = [0, vel_x, vel_y, vel_z]
-            q = [qw, qx, qy, qz]
-            _, vel_x, vel_y, vel_z = q_mult(q, q_mult(vel, q_conjugate(q)))
+            quat = [qw, qx, qy, qz]
+            _, vel_x, vel_y, vel_z = q_mult(quat, q_mult(vel, q_conjugate(quat)))
 
             message = ViveTrackerMessage(valid=True, x=x, y=y, z=z,
                                          qx=qx, qy=qy, qz=qz, qw=qw,
@@ -157,7 +157,8 @@ class ViveTrackerServer(Server):
             print(f"OSError: {e}. Need to restart Vive Tracker Server")
             self.reconnect_triad_vr()
         except Exception as e:
-            print(f"Cannot find Tracker {tracker} is either offline or malfunctioned")
+            print(f"Exception {e} has occurred, this may be because Tracker {tracker} "
+                  f"is either offline or malfunctioned")
             self.reconnect_triad_vr()
             return None
 
