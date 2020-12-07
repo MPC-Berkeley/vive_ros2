@@ -25,7 +25,8 @@ class ViveTrackerNode(Node):
         (self.host_ip, self.host_port, self.tracker_name, self.parent_link_name, self.link_name) = self.get_parameters(
             ['host_ip', 'host_port', 'tracker_name', 'parent_link_name', 'link_name'])
 
-        self.odom_pub = self.create_publisher(Odometry, 'tracker/odom', qos_profile=qos_profile_sensor_data)
+        self.odom_pub = self.create_publisher(Odometry, self.tracker_name.get_parameter_value().string_value + '/odom',
+                                              qos_profile=qos_profile_sensor_data)
 
         client = ViveTrackerClient(host=self.host_ip.get_parameter_value().string_value,
                                    port=self.host_port.get_parameter_value().integer_value,
@@ -52,9 +53,18 @@ class ViveTrackerNode(Node):
                 odom_msg.pose.pose.position.y = msg.y
                 odom_msg.pose.pose.position.z = msg.z
 
+                odom_msg.pose.pose.orientation.x = msg.qx
+                odom_msg.pose.pose.orientation.y = msg.qy
+                odom_msg.pose.pose.orientation.z = msg.qz
+                odom_msg.pose.pose.orientation.w = msg.qw
+
                 odom_msg.twist.twist.linear.x = msg.vel_x
                 odom_msg.twist.twist.linear.y = msg.vel_y
                 odom_msg.twist.twist.linear.z = msg.vel_z
+
+                odom_msg.twist.twist.angular.x = msg.p
+                odom_msg.twist.twist.angular.y = msg.q
+                odom_msg.twist.twist.angular.z = msg.r
 
                 self.odom_pub.publish(odom_msg)
 
