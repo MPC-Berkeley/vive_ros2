@@ -1,25 +1,40 @@
 """
-Implementation of a Vive Tracker Server
-
-For example client implementation, please visit
-https://github.com/augcog/ROAR_Jetson/blob/revamp/vive/vive_tracker_client.py
-
-
+OpenVr based Vive tracker server
 """
 
-from pathlib import Path
-from os.path import expanduser
-
-from typing import Optional
-from triad_openvr import TriadOpenVR
-from utils import q_mult, q_conjugate
-import logging
-from models import ViveTrackerMessage
+import argparse
 import json
-from pprint import pprint
-from base_server import Server
-from typing import List
+import logging
+import logging.handlers
 import socket
+from multiprocessing import Queue, Process, Pipe
+from os.path import expanduser
+from pathlib import Path
+from pprint import pprint
+from typing import List
+from typing import Optional
+
+from base_server import Server
+from gui import MainGui
+from models import ViveDynamicObjectMessage, ViveStaticObjectMessage
+from triad_openvr import TriadOpenVR
+
+
+def construct_socket_msg(data: ViveDynamicObjectMessage) -> str:
+    """
+    Send vive tracker message to socket
+
+    Args:
+        data: ViveTracker Message to send
+
+    Returns:
+        message in string to send
+
+    """
+    json_data = json.dumps(data.json(), sort_keys=False)
+    json_data = "&" + json_data
+    json_data = json_data + "\r"  # * (512 - len(json_data))
+    return json_data
 
 
 class ViveTrackerServer(Server):
@@ -31,20 +46,26 @@ class ViveTrackerServer(Server):
 
     """
 
-    def __init__(self, port, buffer_length: int = 1024, should_record: bool = False,
+    def __init__(self, port, pipe, logging_queue, use_gui=False, buffer_length: int = 1024, should_record: bool = False,
                  output_file_path: Path = Path(expanduser("~") + "/vive_ros2/data/RFS_track.txt")):
         """
         Initialize socket and OpenVR
         
         Args:
             port: desired port to open
+            logging_queue: handler with where to send logs
             buffer_length: maximum buffer (tracker_name) that it can listen to at once
             should_record: should record data or not
             output_file_path: output file's path
         """
         super(ViveTrackerServer, self).__init__(port)
-        self.socket = self.initialize_socket()
         self.logger = logging.getLogger("ViveTrackerServer")
+        self.logger.addHandler(logging.handlers.QueueHandler(logging_queue))
+        self.logger.setLevel(logging.INFO)
+        self.pipe = pipe
+        self.use_gui = use_gui
+
+        self.socket = self.initialize_socket()
         self.triad_openvr: Optional[TriadOpenVR] = self.reconnect_triad_vr(debug=False)
         self.should_record = should_record
         self.output_file_path = output_file_path
@@ -71,13 +92,16 @@ class ViveTrackerServer(Server):
         self.logger.info(f"Starting server at {self.ip}:{self.port}")
         self.logger.info("Connected VR devices: \n###########\n" + str(self.triad_openvr) + "###########")
         while True:
+            messages = {}
+            # Transmit data over the network
             try:
                 tracker_name, addr = self.socket.recvfrom(self.buffer_length)
                 tracker_name = tracker_name.decode()
                 if tracker_name in self.get_tracker_names():
-                    message = self.poll(tracker_name=tracker_name)
+                    message = self.poll_tracker(tracker_name=tracker_name)
+                    messages[tracker_name] = message
                     if message is not None:
-                        socket_message = self.construct_socket_msg(data=message)
+                        socket_message = construct_socket_msg(data=message)
                         self.socket.sendto(socket_message.encode(), addr)
                         if self.should_record:
                             self.record(data=message)
@@ -88,7 +112,21 @@ class ViveTrackerServer(Server):
             except Exception as e:
                 self.logger.error(e)
 
-    def poll(self, tracker_name) -> Optional[ViveTrackerMessage]:
+            # Update the GUI
+            if self.use_gui:
+                for tracker_name in self.get_tracker_names():
+                    # Make sure all trackers are shown in the GUI regardless of if they are being subscribed to
+                    if tracker_name not in messages:
+                        message = self.poll_tracker(tracker_name=tracker_name)
+                        messages[tracker_name] = message
+                for reference_name in self.get_tracking_reference_names():
+                    if reference_name not in messages:
+                        message = self.poll_tracking_reference(reference_name)
+                        messages[reference_name] = message
+
+                self.pipe.send(messages)
+
+    def poll_tracker(self, tracker_name) -> Optional[ViveDynamicObjectMessage]:
         """
         Polls tracker message by name
 
@@ -101,82 +139,141 @@ class ViveTrackerServer(Server):
         Returns:
             ViveTrackerMessage if tracker is found, None otherwise.
         """
-        tracker = self.get_tracker(tracker_name=tracker_name)
+        tracker = self.get_device(device_name=tracker_name)
         if tracker is not None:
-            message: Optional[ViveTrackerMessage] = self.create_tracker_message(tracker=tracker,
-                                                                                tracker_name=tracker_name)
+            message: Optional[ViveDynamicObjectMessage] = self.create_dynamic_message(device=tracker,
+                                                                                      device_name=tracker_name)
             return message
         else:
             self.reconnect_triad_vr()
         return None
 
-    def get_tracker(self, tracker_name):
+    def poll_controller(self, controller_name) -> Optional[ViveDynamicObjectMessage]:
+        """
+        Polls controller message by name
+
+        Note:
+            Server will attempt to reconnect if tracker name is not found.
+
+        Args:
+            controller_name: the vive tracker message intended to poll
+
+        Returns:
+            ViveTrackerMessage if tracker is found, None otherwise.
+        """
+        controller = self.get_device(device_name=controller_name)
+        if controller is not None:
+            message: Optional[ViveDynamicObjectMessage] = self.create_dynamic_message(device=controller,
+                                                                                      device_name=controller_name)
+            return message
+        else:
+            self.reconnect_triad_vr()
+        return None
+
+    def poll_tracking_reference(self, tracking_reference_name) -> Optional[ViveStaticObjectMessage]:
+        """
+        Polls tracking reference message by name
+
+        Note:
+            Server will attempt to reconnect if tracker name is not found.
+
+        Args:
+            tracking_reference_name: the vive tracking reference intended to poll
+
+        Returns:
+            ViveTrackerMessage if tracker is found, None otherwise.
+        """
+        tracking_reference = self.get_device(device_name=tracking_reference_name)
+        if tracking_reference is not None:
+            message: Optional[ViveStaticObjectMessage] = self.create_static_message(device=tracking_reference,
+                                                                                    device_name=tracking_reference_name)
+            return message
+        else:
+            self.reconnect_triad_vr()
+        return None
+
+    def get_device(self, device_name):
         """
         Given tracker name, find the tracker instance
 
         Args:
-            tracker_name: desired tracker's name to find
+            device_name: desired tracker's name to find
 
         Returns:
             tracker instance if found, None otherwise
         """
-        return self.triad_openvr.devices.get(tracker_name, None)
+        return self.triad_openvr.devices.get(device_name, None)
 
-    def create_tracker_message(self, tracker, tracker_name) -> Optional[ViveTrackerMessage]:
+    def create_dynamic_message(self, device, device_name) -> Optional[ViveDynamicObjectMessage]:
         """
-        Create tracker message given tracker and tracker name
+        Create dynamic object message given device and device name
 
         Note:
-            it will attempt to reconnect to OpenVR if conversion or polling from tracker went wrong.
+            it will attempt to reconnect to OpenVR if conversion or polling from device went wrong.
 
         Args:
-            tracker: tracker instance
-            tracker_name: the tracker's name corresponding to this tracker
+            device: tracker instance
+            device_name: the device's name corresponding to this tracker
 
         Returns:
-            Vive tracker message if this is a successful conversion, None otherwise
+            Vive dynamic message if this is a successful conversion, None otherwise
 
         """
         try:
-            x, y, z, qw, qx, qy, qz = tracker.get_pose_quaternion()
-            vel_x, vel_y, vel_z = tracker.get_velocity()
-            p, q, r = tracker.get_angular_velocity()
+            _, _, _, r, p, y = device.get_pose_euler()
+            x, y, z, qw, qx, qy, qz = device.get_pose_quaternion()
+            vel_x, vel_y, vel_z = device.get_velocity()
+            p, q, r = device.get_angular_velocity()
 
             # Rotate velocity in local frame
-            vel = [0, vel_x, vel_y, vel_z]
-            quat = [qw, qx, qy, qz]
-            _, vel_x, vel_y, vel_z = q_mult(quat, q_mult(vel, q_conjugate(quat)))
+            # vel = [0, vel_x, vel_y, vel_z]
+            # quat = [qw, qx, qy, qz]
+            # _, vel_x, vel_y, vel_z = q_mult(quat, q_mult(vel, q_conjugate(quat)))
 
-            message = ViveTrackerMessage(valid=True, x=x, y=y, z=z,
-                                         qx=qx, qy=qy, qz=qz, qw=qw,
-                                         vel_x=vel_x, vel_y=vel_y, vel_z=vel_z,
-                                         p=p, q=q, r=r,
-                                         device_name=tracker_name)
+            message = ViveDynamicObjectMessage(valid=True, x=x, y=y, z=z,
+                                               qx=qx, qy=qy, qz=qz, qw=qw,
+                                               vel_x=vel_x, vel_y=vel_y, vel_z=vel_z,
+                                               p=p, q=q, r=r,
+                                               device_name=device_name)
             return message
         except OSError as e:
             print(f"OSError: {e}. Need to restart Vive Tracker Server")
             self.reconnect_triad_vr()
         except Exception as e:
-            print(f"Exception {e} has occurred, this may be because Tracker {tracker} "
+            print(f"Exception {e} has occurred, this may be because device {device} "
                   f"is either offline or malfunctioned")
             self.reconnect_triad_vr()
             return None
 
-    def construct_socket_msg(self, data: ViveTrackerMessage) -> str:
+    def create_static_message(self, device, device_name) -> Optional[ViveStaticObjectMessage]:
         """
-        Send vive tracker message to socket
+        Create tracker message given device and device name
+
+        Note:
+            it will attempt to reconnect to OpenVR if conversion or polling from tracker went wrong.
 
         Args:
-            data: ViveTracker Message to send
+            device: device instance
+            device_name: the device's name corresponding to this tracker
 
         Returns:
-            message in string to send
+            Vive static message if this is a successful conversion, None otherwise
 
         """
-        json_data = json.dumps(data.json(), sort_keys=False)
-        json_data = "&" + json_data
-        json_data = json_data + "\r"  # * (512 - len(json_data))
-        return json_data
+        try:
+            x, y, z, qw, qx, qy, qz = device.get_pose_quaternion()
+            message = ViveStaticObjectMessage(valid=True, x=x, y=y, z=z,
+                                              qx=qx, qy=qy, qz=qz, qw=qw,
+                                              device_name=device_name)
+            return message
+        except OSError as e:
+            print(f"OSError: {e}. Need to restart Vive Tracker Server")
+            self.reconnect_triad_vr()
+        except Exception as e:
+            print(f"Exception {e} has occurred, this may be because device {device} "
+                  f"is either offline or malfunctioned")
+            self.reconnect_triad_vr()
+            return None
 
     def reconnect_triad_vr(self, debug=False):
         """
@@ -209,13 +306,40 @@ class ViveTrackerServer(Server):
             list of tracker names
 
         """
+        return self.get_device_list(filters=["tracker"])
+
+    def get_tracking_reference_names(self) -> List[str]:
+        """
+        Get a list of tracking references (base stations)
+
+        Returns:
+            list of references names
+
+        """
+        return self.get_device_list(filters=["reference"])
+
+    def get_controller_names(self) -> List[str]:
+        """
+        Get a list of controllers
+
+        Returns:
+            list of controller names
+
+        """
+        return self.get_device_list(filters=["controller"])
+
+    def get_device_list(self, filters=None) -> List[str]:
         result = []
         for device_name in self.triad_openvr.devices.keys():
-            if "tracker" in device_name:
+            if filters is None:
                 result.append(device_name)
+            else:
+                for s in filters:
+                    if s in device_name:
+                        result.append(device_name)
         return result
 
-    def record(self, data: ViveTrackerMessage):
+    def record(self, data: ViveDynamicObjectMessage):
         """
         Record the current data
 
@@ -225,16 +349,43 @@ class ViveTrackerServer(Server):
         Returns:
             None
         """
-        x, y, z, roll, pitch, yaw = data.x, data.y, data.z, data.roll, data.pitch, data.yaw
-        recording_data = f"{x}, {y},{z},{roll},{pitch},{yaw}"
+        x, y, z, qw, qx, qy, qz = data.x, data.y, data.z, data.qw, data.qx, data.qy, data.qz
+        recording_data = f"{x}, {y},{z},{qw},{qx},{qy},{qz}"
         m = f"Recording: {recording_data}"
         self.logger.info(m)
         self.output_file.write(recording_data + "\n")
 
 
-if __name__ == "__main__":
-    PORT = 8000
-    vive_tracker_server = ViveTrackerServer(port=PORT, should_record=False)
-    logging.basicConfig(format='%(asctime)s|%(name)s|%(levelname)s|%(message)s',
-                        datefmt="%H:%M:%S", level=logging.INFO)
+def run_server(port, pipe, logging_queue, use_gui, should_record=False):
+    vive_tracker_server = ViveTrackerServer(port=port, pipe=pipe, logging_queue=logging_queue, use_gui=use_gui,
+                                            should_record=should_record)
     vive_tracker_server.run()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Vive tracker server')
+    parser.add_argument('--headless', default=False, help='if true will not run the gui')
+    parser.add_argument('--port', default=8000, help='port to broadcast tracker data on')
+    args = parser.parse_args()
+
+    logger_queue = Queue()
+    gui_conn, server_conn = Pipe()
+    string_formatter = logging.Formatter(fmt='%(asctime)s|%(name)s|%(levelname)s|%(message)s', datefmt="%H:%M:%S")
+
+    if args.headless:
+        p = Process(target=run_server, args=(args.port, server_conn, logger_queue, False,))
+        p.start()
+        try:
+            # This should be updated to be a bit cleaner
+            while True:
+                print(string_formatter.format(logger_queue.get()))
+        finally:
+            p.kill()
+    else:
+        p = Process(target=run_server, args=(args.port, server_conn, logger_queue, True,))
+        p.start()
+        try:
+            gui = MainGui(gui_conn, logger_queue)
+            gui.start()
+        finally:
+            p.kill()
