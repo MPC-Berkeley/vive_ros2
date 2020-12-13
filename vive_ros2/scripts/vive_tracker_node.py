@@ -4,7 +4,6 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from rclpy.qos import qos_profile_sensor_data
-import tf2_ros
 
 from threading import Thread, Event
 from queue import Queue
@@ -18,7 +17,7 @@ class ViveTrackerNode(Node):
         super().__init__('vive_tracker_node')
         self.declare_parameter('host_ip', '192.168.50.171')
         self.declare_parameter('host_port', 8000)
-        self.declare_parameter('tracker_name', 'tracker_1')
+        self.declare_parameter('tracker_name', 'T_1')
         self.declare_parameter('link_name', 'odom')
         self.declare_parameter('child_link_name', 'tracker_link')
 
