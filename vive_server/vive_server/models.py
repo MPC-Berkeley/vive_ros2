@@ -1,6 +1,20 @@
 from pydantic import BaseModel, Field
 
 
+class Configuration(BaseModel):
+    # Transform from world to vive
+    Twv_x: float = Field(default=0)
+    Twv_y: float = Field(default=0)
+    Twv_z: float = Field(default=0)
+    Twv_qx: float = Field(default=0)
+    Twv_qy: float = Field(default=0)
+    Twv_qz: float = Field(default=0)
+    Twv_qw: float = Field(default=1)
+
+    # Name mappings from serial to device name
+    name_mappings: dict = Field(default={})
+
+
 class ViveDynamicObjectMessage(BaseModel):
     valid: int = Field(default=0)
     x: float = Field(default=0)
@@ -10,13 +24,14 @@ class ViveDynamicObjectMessage(BaseModel):
     qy: float = Field(default=0)
     qz: float = Field(default=0)
     qw: float = Field(default=1)
-    device_name: str = Field(default="None")
     vel_x: float = Field(default=0)
     vel_y: float = Field(default=0)
     vel_z: float = Field(default=0)
     p: float = Field(default=0)
     q: float = Field(default=0)
     r: float = Field(default=0)
+    device_name: str = Field(default="None")
+    serial_num: str = Field(default="None")
 
     def __repr__(self):
         return f"{self.device_name} -> " \
@@ -39,6 +54,7 @@ class ViveStaticObjectMessage(BaseModel):
     qz: float = Field(default=0)
     qw: float = Field(default=1)
     device_name: str = Field(default="None")
+    serial_num: str = Field(default="None")
 
     def __repr__(self):
         return f"{self.device_name} -> " \
