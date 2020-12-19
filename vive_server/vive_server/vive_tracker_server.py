@@ -366,6 +366,7 @@ class ViveTrackerServer(Server):
         try:
             _, _, _, r, p, y = device.get_pose_euler()
             x, y, z, qw, qx, qy, qz = device.get_pose_quaternion()
+
             vel_x, vel_y, vel_z = device.get_velocity()
             p, q, r = device.get_angular_velocity()
 
@@ -374,10 +375,12 @@ class ViveTrackerServer(Server):
             x, y, z = rot_vw.apply([x, y, z])
             x, y, z = self.translate_to_origin(x, y, z)
 
-            # bring velocities into the local device frame
-            # rot_ = transform.Rotation.from_quat([qx, qy, qz, qw]) * rot_vw
-            # # vl * vw
-            # # wl
+            # bring velocities into the local device frame such that positive x is pointing out the USB port
+            rot_lv = transform.Rotation.from_quat([qx, qy, qz, qw]) * transform.Rotation.from_matrix([[0, 1, 0],
+                                                                                                      [1, 0, 0],
+                                                                                                      [0, 0, -1]])
+            vel_x, vel_y, vel_z = rot_lv.apply([vel_x, vel_y, vel_z], inverse=True)
+            p, q, r = rot_lv.apply([p, q, r], inverse=True)
 
             serial = device.get_serial()
             device_name = device_key if serial not in self.config.name_mappings else self.config.name_mappings[serial]
