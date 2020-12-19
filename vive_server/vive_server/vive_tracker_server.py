@@ -14,6 +14,7 @@ from typing import Optional
 import yaml
 import numpy as np
 import scipy.spatial.transform as transform
+import time
 
 from base_server import Server
 from gui import GuiManager
@@ -180,7 +181,7 @@ class ViveTrackerServer(Server):
                 return keys[i]
         return name
 
-    def calibrate_world_frame(self, origin, pos_x, pos_y):
+    def clear_calibration(self):
         self.config.Twv_x = float(0)
         self.config.Twv_y = float(0)
         self.config.Twv_z = float(0)
@@ -189,54 +190,8 @@ class ViveTrackerServer(Server):
         self.config.Twv_qz = float(0)
         self.config.Twv_qw = float(1)
 
-        import time
-        duration = 2
-        origin_key = self.resolve_name_to_key(origin)
-        pos_x_key = self.resolve_name_to_key(pos_x)
-        pos_y_key = self.resolve_name_to_key(pos_y)
-
-        start = time.time()
-        origin_history = []
-        pos_x_history = []
-        pos_y_history = []
-        while time.time() - start < duration:
-            origin_message = self.poll_tracker(origin_key)
-            pos_x_message = self.poll_tracker(pos_x_key)
-            pos_y_message = self.poll_tracker(pos_y_key)
-
-            origin_history.append(np.array([origin_message.x, origin_message.y, origin_message.z]))
-            pos_x_history.append(np.array([pos_x_message.x, pos_x_message.y, pos_x_message.z]))
-            pos_y_history.append(np.array([pos_y_message.x, pos_y_message.y, pos_y_message.z]))
-
-        origin_history = np.array(origin_history)
-        pos_x_history = np.array(pos_x_history)
-        pos_y_history = np.array(pos_y_history)
-
-        avg_origin = np.average(origin_history, axis=0)
-        avg_pos_x = np.average(pos_x_history, axis=0)
-        avg_pos_y = np.average(pos_y_history, axis=0)
-
-        vx = avg_pos_x - avg_origin
-        vy = avg_pos_y - avg_origin
-
-        vx /= np.linalg.norm(vx)
-        vy /= np.linalg.norm(vy)
-
-        vz = np.cross(vx, vy)
-        M_rot = np.array([[*vx, 0],
-                          [*vy, 0],
-                          [*vz, 0],
-                          [0, 0, 0, 1]])
-
-        M_pos = np.array([[1, 0, 0, -avg_origin[0]],
-                          [0, 1, 0, -avg_origin[1]],
-                          [0, 0, 1, -avg_origin[2]],
-                          [0, 0, 0, 1]])
-
-        T = M_rot @ M_pos
-
-        R = transform.Rotation.from_matrix(T[:3, :3])
-        q = R.as_quat()  # x y z w
+    def set_config_calibration_from_matrix(self, T):
+        q = transform.Rotation.from_matrix(T[:3, :3]).as_quat()  # x y z w
         t = T[:3, 3]
 
         self.config.Twv_x = float(t[0])
@@ -246,6 +201,50 @@ class ViveTrackerServer(Server):
         self.config.Twv_qy = float(q[1])
         self.config.Twv_qz = float(q[2])
         self.config.Twv_qw = float(q[3])
+
+    def calibrate_world_frame(self, origin: str, pos_x: str, pos_y: str, duration: float = 2.0):
+
+        self.clear_calibration()
+
+        origin_key = self.resolve_name_to_key(origin)
+        pos_x_key = self.resolve_name_to_key(pos_x)
+        pos_y_key = self.resolve_name_to_key(pos_y)
+
+        origin_history = []
+        pos_x_history = []
+        pos_y_history = []
+        start = time.time()
+        while time.time() - start < duration:
+            origin_message = self.poll_tracker(origin_key)
+            pos_x_message = self.poll_tracker(pos_x_key)
+            pos_y_message = self.poll_tracker(pos_y_key)
+
+            origin_history.append(np.array([origin_message.x, origin_message.y, origin_message.z]))
+            pos_x_history.append(np.array([pos_x_message.x, pos_x_message.y, pos_x_message.z]))
+            pos_y_history.append(np.array([pos_y_message.x, pos_y_message.y, pos_y_message.z]))
+
+        avg_origin = np.average(np.array(origin_history), axis=0)
+        avg_pos_x = np.average(np.array(pos_x_history), axis=0)
+        avg_pos_y = np.average(np.array(pos_y_history), axis=0)
+
+        vx = avg_pos_x - avg_origin
+        vy = avg_pos_y - avg_origin
+
+        vx /= np.linalg.norm(vx)
+        vy /= np.linalg.norm(vy)
+        vz = np.cross(vx, vy)
+
+        m_rot = np.array([[*vx, 0],
+                          [*vy, 0],
+                          [*vz, 0],
+                          [0, 0, 0, 1]])
+
+        m_pos = np.array([[1, 0, 0, -avg_origin[0]],
+                          [0, 1, 0, -avg_origin[1]],
+                          [0, 0, 1, -avg_origin[2]],
+                          [0, 0, 0, 1]])
+
+        self.set_config_calibration_from_matrix(m_rot @ m_pos)
 
     def save_config(self, path: Path = None):
         path = path or self.config_path  # default to self.config_path is path is None
@@ -332,6 +331,23 @@ class ViveTrackerServer(Server):
         """
         return self.triad_openvr.devices.get(key, None)
 
+    def get_rot_vw(self) -> transform.Rotation:
+        """Get the rotation from the vive frame to the world frame"""
+        return transform.Rotation.from_quat([self.config.Twv_qx,
+                                             self.config.Twv_qy,
+                                             self.config.Twv_qz,
+                                             self.config.Twv_qw])
+
+    def get_rot_wv(self) -> transform.Rotation:
+        """Get the rotation from the world frame to the vive frame"""
+        return transform.Rotation.from_quat([self.config.Twv_qx,
+                                             self.config.Twv_qy,
+                                             self.config.Twv_qz,
+                                             self.config.Twv_qw]).inverse()
+
+    def translate_to_origin(self, x, y, z):
+        return x + self.config.Twv_x, y + self.config.Twv_y, z + self.config.Twv_z
+
     def create_dynamic_message(self, device, device_key) -> Optional[ViveDynamicObjectMessage]:
         """
         Create dynamic object message given device and device name
@@ -353,12 +369,15 @@ class ViveTrackerServer(Server):
             vel_x, vel_y, vel_z = device.get_velocity()
             p, q, r = device.get_angular_velocity()
 
-            qwv = transform.Rotation.from_quat([self.config.Twv_qx,
-                                                self.config.Twv_qy,
-                                                self.config.Twv_qz,
-                                                self.config.Twv_qw])
-            x, y, z = qwv.apply([x, y, z])
-            x, y, z = x + self.config.Twv_x, y + self.config.Twv_y, z + self.config.Twv_z
+            # handle world transform
+            rot_vw = self.get_rot_vw()
+            x, y, z = rot_vw.apply([x, y, z])
+            x, y, z = self.translate_to_origin(x, y, z)
+
+            # bring velocities into the local device frame
+            # rot_ = transform.Rotation.from_quat([qx, qy, qz, qw]) * rot_vw
+            # # vl * vw
+            # # wl
 
             serial = device.get_serial()
             device_name = device_key if serial not in self.config.name_mappings else self.config.name_mappings[serial]
@@ -395,6 +414,8 @@ class ViveTrackerServer(Server):
         """
         try:
             x, y, z, qw, qx, qy, qz = device.get_pose_quaternion()
+            x, y, z = self.get_rot_vw().apply([x, y, z])
+            x, y, z = self.translate_to_origin(x, y, z)
             serial = device.get_serial()
             device_name = device_key if serial not in self.config.name_mappings else self.config.name_mappings[serial]
             message = ViveStaticObjectMessage(valid=True, x=x, y=y, z=z,
