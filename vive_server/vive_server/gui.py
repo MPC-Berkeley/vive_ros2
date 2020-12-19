@@ -1,10 +1,11 @@
 from abc import ABC, abstractmethod
-import numpy as np
 import queue
-import scipy.spatial.transform as transform
+from pathlib import Path
 
 from dearpygui.simple import *
 from dearpygui.core import *
+
+from models import Configuration
 
 RED = [255, 0, 0, 255]
 GREEN = [0, 255, 0, 255]
@@ -19,21 +20,22 @@ CONTROLLER_COLOR = [255, 255, 255, 255]
 
 
 class Page(ABC):
-    def __init__(self, name, main_gui):
+    def __init__(self, name: str, gui_manager):
         self.name = name
-        self.main_gui = main_gui
+        self.gui_manager = gui_manager
+
+    def show(self) -> bool:
+        if not does_item_exist(self.name):
+            add_window(self.name, autosize=True, on_close=self.clear)
+            return True
+        return False
 
     @abstractmethod
-    def show(self):
+    def update(self, system_state: dict):
         pass
 
-    @abstractmethod
-    def update(self, device_state):
-        pass
-
-    @abstractmethod
     def clear(self, sender, data):
-        pass
+        delete_item(self.name)
 
 
 # render 3d scene from the top down (size of dot represent the scale on the z)
@@ -43,7 +45,7 @@ class Scene:
         self.name = name
         self.width = width
         self.height = height
-        self.scale_x, self.scale_y = self.width / 10, self.height / 10
+        self.scale_x, self.scale_y = self.width / 10, self.width / 10
         self.z_scale, self.z_offset = 10, 1.0
 
         self.center = [self.width / 2, self.height / 2]
@@ -52,7 +54,6 @@ class Scene:
     def add(self):
         add_spacing()
         add_drawing(self.name, width=self.width, height=self.height)
-        # set_mouse_click_callback(self.mouse_click)
         set_mouse_wheel_callback(self.mouse_wheel)
 
     def real_pose_from_pixels(self, point):
@@ -92,7 +93,7 @@ class Scene:
 
     def add_axes(self):
         length = 40
-        draw_line("scene", self.center, [self.center[0], self.center[1] - length], GREEN, 3, tag="axis1")
+        draw_line("scene", self.center, [self.center[0], self.center[1] + length], GREEN, 3, tag="axis1")
         draw_line("scene", self.center, [self.center[0] + length, self.center[1]], RED, 3, tag="axis2")
         draw_circle("scene", self.center, 4, BLUE, fill=BLUE,
                     tag="axis3")
@@ -109,42 +110,91 @@ class Scene:
 
 
 class DevicesPage(Page):
-    def __init__(self, main_gui, name="devices"):
-        super().__init__(name, main_gui)
+    def __init__(self, gui_manager, name="devices"):
+        super().__init__(name, gui_manager)
         self.devices_shown = []
 
-    def show(self):
-        if not does_item_exist(self.name):
-            add_window(self.name, autosize=True, on_close=self.clear)
-
-    def update(self, device_state):
-        for device in device_state:
-            serial = device_state[device].serial_num
+    def update(self, system_state):
+        for device in system_state:
+            serial = system_state[device].serial_num
             if device not in self.devices_shown:
                 self.devices_shown.append(device)
-                add_input_text(f"{device}:{serial}##name", default_value=device_state[device].device_name,
+                add_input_text(f"{device}:{serial}##name", default_value=system_state[device].device_name,
                                on_enter=True, callback=self.update_device_name,
                                callback_data=(device, serial))
                 add_text(f"{serial}_txt", color=GREY)
             else:
-                set_value(f"{serial}_txt", f"x: {round(device_state[device].x, 2)}, "
-                                           f"y: {round(device_state[device].y, 2)}, "
-                                           f"z: {round(device_state[device].z, 2)}")
+                set_value(f"{serial}_txt", f"x: {round(system_state[device].x, 2)}, "
+                                           f"y: {round(system_state[device].y, 2)}, "
+                                           f"z: {round(system_state[device].z, 2)}")
 
     def update_device_name(self, sender, data):
         device, serial = data
         new_name = get_value(f"{device}:{serial}##name")
-        self.main_gui.update_device_name(serial, new_name)
+        config = self.gui_manager.get_config()
+        config.name_mappings[serial] = new_name
+        self.gui_manager.update_config(config)
 
     def clear(self, sender, data):
-        delete_item(self.name)
+        super(DevicesPage, self).clear(sender, data)
         self.devices_shown = []
 
 
 # Calibration page includes scene with special configuration
-class CalibrationPage:
-    def __init__(self):
-        pass
+class CalibrationPage(Page):
+    def __init__(self, name: str, gui_manager):
+        super(CalibrationPage, self).__init__(name, gui_manager)
+        self.trackers = []
+        self.origin_tracker = None
+        self.pos_x_tracker = None
+        self.pos_y_tracker = None
+
+    def show(self):
+        if super(CalibrationPage, self).show():
+            with window(self.name):
+                add_text("instructions##calibration", default_value="Please select a tracker for "
+                                                                    "each axis. Available trackers "
+                                                                    "are listed below for convenience:")
+                add_spacing()
+                add_text("trackers##calibration", default_value=str(self.trackers))
+                add_input_text(f"origin##calibration", default_value="", callback=self.update_origin)
+                add_input_text(f"+x##calibration", default_value="", callback=self.update_pos_x)
+                add_input_text(f"+y##calibration", default_value="", callback=self.update_pos_y)
+                add_button("Start calibration", callback=self.run_calibration)
+
+    def update_origin(self, sender, data):
+        self.origin_tracker = get_value("origin##calibration")
+
+    def update_pos_x(self, sender, data):
+        self.pos_x_tracker = get_value("+x##calibration")
+
+    def update_pos_y(self, sender, data):
+        self.pos_y_tracker = get_value("+y##calibration")
+
+    def run_calibration(self, sender, data):
+        # verify valid input (trackers + unique)
+        if self.origin_tracker in self.trackers and \
+                self.pos_y_tracker in self.trackers and \
+                self.pos_x_tracker in self.trackers and \
+                self.origin_tracker != self.pos_x_tracker and \
+                self.origin_tracker != self.pos_y_tracker and \
+                self.pos_x_tracker != self.pos_y_tracker:
+            self.gui_manager.call_calibration(self.origin_tracker, self.pos_x_tracker, self.pos_y_tracker)
+        else:
+            log_warning("Invalid tracker entered for calibration")
+
+    def update(self, system_state: dict):
+        trackers = []
+        for key in system_state:
+            if "tracker" in key:
+                trackers.append(system_state[key].device_name)
+        if len(trackers) > len(self.trackers):
+            self.trackers = trackers
+            set_value("trackers##calibration", str(trackers))
+
+    def clear(self, sender, data):
+        super(CalibrationPage, self).clear(sender, data)
+        self.trackers = []
 
 
 class TestCalibrationPage:
@@ -152,14 +202,38 @@ class TestCalibrationPage:
         pass
 
 
+class ConfigurationPage(Page):
+    def show(self):
+        super(ConfigurationPage, self).show()
+
+    def update(self, system_state):
+        config = self.gui_manager.get_config()
+        if config is not None:
+            config_dict = dict(self.gui_manager.get_config())
+            for value in config_dict:
+                if not does_item_exist(f"{value}##config"):
+                    add_input_text(f"{value}##config", default_value=str(config_dict[value]),
+                                   on_enter=True, callback=self.update_config_entry,
+                                   callback_data=value)
+                else:
+                    set_value(f"{value}##config", str(config_dict[value]))
+
+    def update_config_entry(self, sender, data):
+        config = self.gui_manager.get_config()
+
+
 class VisualizationPage:
-    def __init__(self, main_gui):
-        self.main_gui = main_gui
+    def __init__(self, gui_manager):
+        self.gui_manager = gui_manager
         self.scene = Scene()
-        self.devices_list = DevicesPage(name="Devices List", main_gui=self.main_gui)
+        self.devices_page = DevicesPage(name="Devices List", gui_manager=self.gui_manager)
+        self.configuration_page = ConfigurationPage(name="Configuration", gui_manager=self.gui_manager)
+        self.calibrattion_page = CalibrationPage(name="Calibration", gui_manager=self.gui_manager)
 
     def show(self):
         add_button("Save Configuration", callback=self.save_config)
+        add_same_line()
+        add_button("Refresh", callback=self.refresh)
         add_same_line()
         add_button("Calibrate", callback=self.calibrate)
         add_same_line()
@@ -167,43 +241,56 @@ class VisualizationPage:
         add_same_line()
         add_button("List Devices", callback=self.list_devices)
         add_same_line()
+        add_button("Show Configuration", callback=self.show_configuration)
+        add_same_line()
         add_button("Logs", callback=self.logs)
         self.scene.add()
 
     def save_config(self, sender, data):
-        self.main_gui.save_configuration()
+        self.gui_manager.save_config()
+
+    def refresh(self, sender, data):
+        self.gui_manager.refresh_system()
 
     def calibrate(self, sender, data):
-        pass
+        self.calibrattion_page.show()
 
     def test_calibration(self, sender, data):
         pass
 
     def list_devices(self, sender, data):
-        self.devices_list.show()
+        self.devices_page.show()
+
+    def show_configuration(self, sender, data):
+        self.configuration_page.show()
 
     def logs(self, sender, data):
         show_logger()
 
-    def update(self, device_state):
-        self.scene.draw(device_state)
+    def update(self, system_state: dict):
+        self.scene.draw(system_state)
         if does_item_exist("Devices List"):
-            self.devices_list.update(device_state)
+            self.devices_page.update(system_state)
+        if does_item_exist("Configuration"):
+            self.configuration_page.update(system_state)
+        if does_item_exist("Calibration"):
+            self.calibrattion_page.update(system_state)
 
     def clear(self):
         pass
 
 
-class MainGui:
+class GuiManager:
     def __init__(self, pipe, logging_queue):
-        self.pipe = pipe
-        self.logging_queue = logging_queue
-        self.page = VisualizationPage(self)
+        self._pipe = pipe
+        self._logging_queue = logging_queue
+        self._server_config: Configuration() = None
+        self._page = VisualizationPage(self)
 
     def on_render(self, sender, data):
-        while self.logging_queue.qsize() > 0:
+        while self._logging_queue.qsize() > 0:
             try:
-                record = self.logging_queue.get_nowait()
+                record = self._logging_queue.get_nowait()
                 message = record.getMessage()
                 logging_level = record.levelname
                 if logging_level == "DEBUG":
@@ -217,22 +304,36 @@ class MainGui:
             except queue.Empty:
                 pass
 
-        device_state = {}
-        while self.pipe.poll():
-            device_state = self.pipe.recv()
+        system_state = {}
+        while self._pipe.poll():
+            data = self._pipe.recv()
+            if "state" in data:
+                system_state = data["state"]
+            if "config" in data:
+                self._server_config = data["config"]
+        self._page.update(system_state)
 
-        self.page.update(device_state)
+    def update_config(self, config):
+        self._server_config = config
+        self._pipe.send({"config": self._server_config})
 
-    def update_device_name(self, serial, new_name):
-        self.pipe.send({"map_name": {serial: new_name}})
+    def get_config(self) -> Configuration:
+        if self._server_config is not None:
+            return self._server_config.copy()
 
-    def save_configuration(self):
-        self.pipe.send({"save_configuration": ""})
+    def save_config(self, path: Path = None):
+        self._pipe.send({"save": path})
+
+    def refresh_system(self):
+        self._pipe.send({"refresh": None})
+
+    def call_calibration(self, origin, pos_x, pos_y):
+        self._pipe.send({"calibrate": (origin, pos_x, pos_y)})
 
     # Will Run the main gui
     def start(self):
         with window("Vive Server", autosize=True, x_pos=20, y_pos=20):
-            self.page.show()
+            self._page.show()
 
         set_render_callback(self.on_render)
         start_dearpygui()

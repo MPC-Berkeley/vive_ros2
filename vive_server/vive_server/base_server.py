@@ -27,6 +27,6 @@ class Server(ABC):
         soc.setsockopt(socket.SOL_IP, socket.IP_MULTICAST_LOOP, 1)
         soc.bind(('', self.port))  # do NOT modify this line's order with other lines
         soc.setsockopt(socket.SOL_IP, socket.IP_MULTICAST_IF, socket.inet_aton(self.ip))
-        soc.settimeout(5)
+        soc.settimeout(3)
         self.socket = soc
         return soc
