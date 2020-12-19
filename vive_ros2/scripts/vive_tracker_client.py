@@ -10,7 +10,7 @@ import logging
 from typing import Optional
 from os.path import expanduser
 
-from vive_server.models import ViveTrackerMessage
+from vive_server.models import ViveDynamicObjectMessage
 import json
 from typing import Tuple
 import argparse
@@ -51,7 +51,7 @@ class ViveTrackerClient:
         self.socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 20)
         self.socket.settimeout(self.time_out)
-        self.latest_tracker_message: Optional[ViveTrackerMessage] = None
+        self.latest_tracker_message: Optional[ViveDynamicObjectMessage] = None
         self.should_record = should_record
         self.output_file_path = output_file_path
         self.output_file = None
@@ -177,7 +177,7 @@ class ViveTrackerClient:
         """
         try:
             d = json.loads(json.loads(parsed_message))
-            vive_tracker_message = ViveTrackerMessage.parse_obj(d)
+            vive_tracker_message = ViveDynamicObjectMessage.parse_obj(d)
             if vive_tracker_message.device_name == self.tracker_name:
                 self.latest_tracker_message = vive_tracker_message
             self.logger.debug(self.latest_tracker_message)
