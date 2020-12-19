@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import queue
 from pathlib import Path
+import math
 
 from dearpygui.simple import *
 from dearpygui.core import *
@@ -8,6 +9,7 @@ from dearpygui.core import *
 from models import Configuration
 
 RED = [255, 0, 0, 255]
+PURPLE = [128, 0, 128, 255]
 GREEN = [0, 255, 0, 255]
 BLUE = [0, 0, 255, 255]
 GREY = [128, 128, 128, 255]
@@ -75,6 +77,13 @@ class Scene:
                   tag=f"{tracker_msg.device_name}txt")
         draw_circle(self.name, point, diameter, TRACKER_COLOR, fill=TRACKER_COLOR,
                     tag=f"{tracker_msg.device_name}dot")
+        _, _, yaw = tracker_msg.rotation_as_scipy_transform().as_euler("xyz")
+        radius = 20 + diameter / 2
+        pt2 = [point[0] - radius * math.cos(yaw), point[1] + radius * math.sin(yaw)]
+        draw_line(self.name, point, pt2, PURPLE, 3, tag=f"{tracker_msg.device_name}line")
+
+    def draw_reference(self, reference_msg):
+        pass
 
     def draw_scales(self):
         tick_h = 5

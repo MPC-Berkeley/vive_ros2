@@ -382,6 +382,8 @@ class ViveTrackerServer(Server):
             vel_x, vel_y, vel_z = rot_lv.apply([vel_x, vel_y, vel_z], inverse=True)
             p, q, r = rot_lv.apply([p, q, r], inverse=True)
 
+            qx, qy, qz, qw = rot_lv.inv().as_quat()
+
             serial = device.get_serial()
             device_name = device_key if serial not in self.config.name_mappings else self.config.name_mappings[serial]
             message = ViveDynamicObjectMessage(valid=True, x=x, y=y, z=z,

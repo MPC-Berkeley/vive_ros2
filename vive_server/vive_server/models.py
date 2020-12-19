@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field
+import scipy.spatial.transform as transform
 
 
 class Configuration(BaseModel):
@@ -32,6 +33,9 @@ class ViveDynamicObjectMessage(BaseModel):
     r: float = Field(default=0)
     device_name: str = Field(default="None")
     serial_num: str = Field(default="None")
+
+    def rotation_as_scipy_transform(self) -> transform.Rotation:
+        return transform.Rotation.from_quat([self.qx, self.qy, self.qz, self.qw])
 
     def __repr__(self):
         return f"{self.device_name} -> " \
