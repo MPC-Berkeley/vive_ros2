@@ -15,6 +15,7 @@ import yaml
 import numpy as np
 import scipy.spatial.transform as transform
 import time
+import os
 
 from base_server import Server
 from gui import GuiManager
@@ -73,6 +74,7 @@ class ViveTrackerServer(Server):
 
         # load the configuration if one exists otherwise create one and set defaults
         if not self.config_path.exists():
+            os.makedirs(os.path.dirname(self.config_path))
             with open(self.config_path, 'w') as f:
                 yaml.dump(self.config.dict(), f)
         else:
