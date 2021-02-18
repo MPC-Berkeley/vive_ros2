@@ -11,7 +11,7 @@ be run on the same device if desired.
 
 ## Getting Started
 ### Running the Python Server
-The best way to get started is to install conda and run `conda create -f env.yaml` which 
+The best way to get started is to install conda and run `conda env create -f env.yaml` which 
 will create a conda environment with the correct python version and libraries. You can then
 activate the environment with `conda activate pythonvr`. Start the server by running `vive_tracker_server.py` in 
 the `vive_server` folder. Make sure to have `SteamVR` installed and running with the headset plugged in.
